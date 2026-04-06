@@ -1,0 +1,38 @@
+services:
+  cosmos-db-service:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - NODE_ENV=development
+      - APP_NAME=Cosmos DB Service 
+      - DUCKDB_API_BASE_URL=https://wa-duckdb-bot-f6dzhzc6cdfga8bv.southeastasia-01.azurewebsites.net 
+      - AZURE_OPENAI_ENDPOINT=https://kisha-m99t7813-eastus2.cognitiveservices.azure.com
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=depmodel1 
+      - AZURE_COSMOS_ENDPOINT=https://test-chatbot.documents.azure.com:443/
+      - AZURE_COSMOS_KEY=${AZURE_COSMOS_KEY}
+      - COSMOSDB_DATABASE=DashboardDB
+      - DB_CONNECTION_STRING=${DB_CONNECTION_STRING}
+      - DB_USER=srinivas
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_SERVER=sqldb-own.database.windows.net
+      - DB_DATABASE=sqldb
+      - DB_PORT=1433
+      - DB_SCHEMA=bi
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8000/healthz', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - cosmos-network
+
+networks:
+  cosmos-network:
+    driver: bridge
