@@ -120,8 +120,8 @@ const dashboardController = {
                   widgetId: item.widgetId,
                   widgetName:
                     validVisuals.find((v) => v.id === item.widgetId)
-                      ?.report_name || `Widget ${item.widgetId}`,
-                }));
+                      ?.name || `Widget ${item.widgetId}`,
+                }));                
 
                 // Store visual data in CosmosDB with dashboard ID as partition key
                 await visualResponseService.storeVisualResponse(
@@ -153,87 +153,59 @@ const dashboardController = {
                   if (cosmosData.length >= 2) {
                     const latest = cosmosData[0].queryResult || [];
                     const previous = cosmosData[1].queryResult || [];
+                    
+                    // Limit data size to prevent token limit exceeded errors
+                    const maxDataSize = 50000; // characters limit
+                    let limitedLatest = latest;
+                    let limitedPrevious = previous;
+                    
+                    if (JSON.stringify(latest).length > maxDataSize) {
+                      limitedLatest = latest.slice(0, 20); // Limit to first 20 widgets
+                    }
+                    if (JSON.stringify(previous).length > maxDataSize) {
+                      limitedPrevious = previous.slice(0, 20); // Limit to first 20 widgets
+                    }
 
-                    // Find widgets with actual data changes
-                    const changes = latest.filter((widget) => {
-                      const oldWidget = previous.find(
-                        (w) => w.widgetId === widget.widgetId,
-                      );
+                    const messages = [
+                      {
+                        role: "function",
+                        content: `Compare latest and previous dashboard data, then write a short client-friendly summary in plain text. Use exactly these bold section titles only: **Dashboard Insights**, **Key Takeaways**, **Focus Areas**, **Outliers**. Do not number the sections. Use actual widgetName values, not "Widget X". For changed widgets, show old vs new values like "Country Names in Bar Chart: users increased from 27 to 28". Use ➤ for bullet points in Dashboard Insights and Focus Areas sections, bold important numbers and changes, use 💡 for takeaways and 🔍 for outliers, focus on meaningful values only (counts, percentages, amounts), not IDs. No HTML, no technical wording, no extra text, no invented facts. Data: Latest=${JSON.stringify(limitedLatest)}, Previous=${JSON.stringify(limitedPrevious)}`,
+                        name: "askDatabase",
+                      },
+                      {
+                        role: "user",
+                        content:
+                          "Do **not** include any troubleshooting steps.",
+                      },
+                    ];
 
-                      if (!oldWidget) {
-                        return true; // New widget
-                      }
+                    const completion =
+                      await azureClient.chat.completions.create({
+                        model: "gpt-4o",
+                        messages,
+                        temperature: 0.2,
+                        max_tokens: 300,
+                      });
 
-                      // Compare data arrays more thoroughly
-                      const newData = Array.isArray(widget.data)
-                        ? widget.data
-                        : [];
-                      const oldData = Array.isArray(oldWidget.data)
-                        ? oldWidget.data
-                        : [];
+                    const aiSummary =
+                      completion.choices[0].message.content.trim();
 
-                      // Check if data length changed
-                      if (newData.length !== oldData.length) {
-                        return true;
-                      }
+                    console.log("aisummary-----", aiSummary);
 
-                      // Check if data values changed
-                      return (
-                        JSON.stringify(
-                          newData.sort((a, b) =>
-                            JSON.stringify(a).localeCompare(JSON.stringify(b)),
-                          ),
-                        ) !==
-                        JSON.stringify(
-                          oldData.sort((a, b) =>
-                            JSON.stringify(a).localeCompare(JSON.stringify(b)),
-                          ),
-                        )
-                      );
-                    });
-
-                    if (changes.length > 0) {
-                      const messages = [
+                    // Update dashboard summary in database
+                    try {
+                      await SQLquery(
+                        `UPDATE bi.dashboard SET dashboard_summary = @param0, summary_displayed = 0, modified_at = CURRENT_TIMESTAMP WHERE id = @param1`,
                         {
-                          role: "function",
-                          content: `This is the result of the database query: ${JSON.stringify(
-                            changes,
-                          )}, Summarize this data as a short, client-friendly AI summary in plain text. Output exactly 4 sections: 1) Dashboard Insights, 2) Key Takeaways, 3) Focus Areas, 4) Outliers (if any). Use short bullet points, include key trends, comparisons, top and lowest performers, and bold numbers and what's necessary. Use 💡 for takeaways and 🔍 for outliers. No HTML, no technical wording, no extra text, and no invented facts.`,
-                          name: "askDatabase",
+                          param0: aiSummary,
+                          param1: dashboard.id,
                         },
-                        {
-                          role: "user",
-                          content:
-                            "Do **not** include any troubleshooting steps.",
-                        },
-                      ];
-
-                      const completion =
-                        await azureClient.chat.completions.create({
-                          model: "gpt-4o",
-                          messages,
-                          temperature: 0.2,
-                          max_tokens: 300,
-                        });
-
-                      const aiSummary =
-                        completion.choices[0].message.content.trim();
-
-                      // Update dashboard summary in database
-                      try {
-                        await SQLquery(
-                          `UPDATE bi.dashboard SET dashboard_summary = @param0, summary_displayed = 0, modified_at = CURRENT_TIMESTAMP WHERE id = @param1`,
-                          {
-                            param0: aiSummary,
-                            param1: dashboard.id,
-                          },
-                        );
-                      } catch (updateError) {
-                        console.error(
-                          `[DASHBOARD] Failed to update summary for dashboard ${dashboard.id}:`,
-                          updateError.message,
-                        );
-                      }
+                      );
+                    } catch (updateError) {
+                      console.error(
+                        `[DASHBOARD] Failed to update summary for dashboard ${dashboard.id}:`,
+                        updateError.message,
+                      );
                     }
                   }
                 } catch (aiError) {
@@ -268,7 +240,8 @@ const dashboardController = {
       res.status(200).json({
         success: true,
         message: `Successfully processed and stored data for ${dashboards.length} dashboards`,
-        data: processedDashboards,
+        sourceId: processedDashboards[0].source_id,
+        data: processedDashboards.map((dashboard) => dashboard.id),
       });
     } catch (error) {
       console.error("[DASHBOARD] Error in getAllDashboards:", error);
