@@ -383,14 +383,19 @@ const dashboardController = {
                             - Focus on what a business user should notice first.
 
                             Formatting:
-                            - Use → bullets under Dashboard Insights
-                            - Use 💡 bullets under Key Takeaways
-                            - Use 🔍 bullets under Focus Areas
-                            - Use * bullets under Anomalies
                             - Bold important numbers, important metric names, and important changes
                             - No HTML
                             - No markdown other than the required bold section titles
-                            - No extra intro or closing text`,
+                            - No extra intro or closing text
+
+                            - Return the response as a JSON object with these exact keys:
+                            {
+                              "dashboardInsights": ["bullet points"],
+                              "keyTakeaways": ["bullet points"], 
+                              "focusAreas": ["bullet points"],
+                              "anomalies": ["bullet points"],
+                              "outliers": ["bullet points"]
+                            }`,
                         name: "askDatabase",
                       },
                       {
