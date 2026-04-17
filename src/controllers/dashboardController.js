@@ -9,6 +9,161 @@ const { azureClient } = require("../services/openaiClient");
 const DUCKDB_API_BASE_URL =
   process.env.DUCKDB_API_BASE_URL || "http://localhost:8080";
 
+// Helper function to generate comparison JSON between refresh cycles
+const generateComparisonJson = (latestData, previousData) => {
+  const widgetDiffs = [];
+  const stableMetrics = [];
+  let changedWidgets = 0;
+  let stableWidgetsCount = 0;
+  const topMovers = [];
+
+  // Create maps for easier comparison
+  const latestMap = new Map();
+  const previousMap = new Map();
+
+  latestData.forEach(widget => {
+    latestMap.set(widget.widgetId, widget);
+  });
+
+  previousData.forEach(widget => {
+    previousMap.set(widget.widgetId, widget);
+  });
+
+  // Compare widgets
+  for (const [widgetId, latestWidget] of latestMap) {
+    const previousWidget = previousMap.get(widgetId);
+    
+    if (!previousWidget) {
+      // New widget, skip for now
+      continue;
+    }
+
+    const latestValue = extractValue(latestWidget.data);
+    const previousValue = extractValue(previousWidget.data);
+    
+    if (latestValue !== null && previousValue !== null) {
+      const change = calculateChange(latestValue, previousValue);
+      
+      if (change.isSignificant) {
+        changedWidgets++;
+        const diff = {
+          widgetName: latestWidget.widgetName,
+          latestValue: latestValue,
+          previousValue: previousValue,
+          absoluteChange: change.absoluteChange,
+          percentChange: change.percentChange,
+          isSignificant: change.isSignificant,
+          direction: change.direction,
+          metricType: detectMetricType(latestValue, previousValue)
+        };
+
+        // Add entity if available
+        const entity = extractEntity(latestWidget.data);
+        if (entity) {
+          diff.entity = entity;
+        }
+
+        widgetDiffs.push(diff);
+        
+        // Track top movers (top 3 by percent change)
+        if (Math.abs(change.percentChange) > 5) {
+          topMovers.push({
+            widgetName: latestWidget.widgetName,
+            percentChange: change.percentChange
+          });
+        }
+      } else {
+        stableWidgetsCount++;
+        stableMetrics.push(latestWidget.widgetName);
+      }
+    }
+  }
+
+  // Sort top movers by absolute percent change
+  topMovers.sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange));
+
+  return {
+    summaryStats: {
+      changedWidgets,
+      stableWidgets: stableWidgetsCount,
+      topMovers: Math.min(3, topMovers.length)
+    },
+    widgetDiffs: widgetDiffs.slice(0, 10), // Limit to top 10 changes
+    stableMetrics: stableMetrics.slice(0, 5) // Limit to first 5 stable metrics
+  };
+};
+
+// Helper function to extract numeric value from widget data
+const extractValue = (data) => {
+  if (!data || !Array.isArray(data) || data.length === 0) return null;
+  
+  // Try to find a numeric value in the first row
+  const firstRow = data[0];
+  const values = Object.values(firstRow);
+  
+  for (const val of values) {
+    if (typeof val === 'number') {
+      return val;
+    }
+    if (typeof val === 'string' && !isNaN(parseFloat(val))) {
+      return parseFloat(val);
+    }
+  }
+  
+  return null;
+};
+
+// Helper function to calculate change between values
+const calculateChange = (latest, previous) => {
+  if (previous === 0) {
+    return {
+      absoluteChange: latest,
+      percentChange: latest > 0 ? 100 : 0,
+      isSignificant: latest > 0,
+      direction: latest > 0 ? 'up' : 'stable'
+    };
+  }
+
+  const absoluteChange = latest - previous;
+  const percentChange = (absoluteChange / previous) * 100;
+  
+  // Consider significant if change > 2% or absolute change > 100
+  const isSignificant = Math.abs(percentChange) > 2 || Math.abs(absoluteChange) > 100;
+  
+  return {
+    absoluteChange,
+    percentChange,
+    isSignificant,
+    direction: percentChange > 0 ? 'up' : percentChange < 0 ? 'down' : 'stable'
+  };
+};
+
+// Helper function to detect metric type
+const detectMetricType = (latest, previous) => {
+  // Check if values look like currency (typically have decimals and are large)
+  if (latest > 1000 || previous > 1000) {
+    return 'currency';
+  }
+  return 'count';
+};
+
+// Helper function to extract entity from widget data
+const extractEntity = (data) => {
+  if (!data || !Array.isArray(data) || data.length === 0) return null;
+  
+  const firstRow = data[0];
+  // Look for common entity field names
+  const entityFields = ['name', 'title', 'category', 'type', 'game', 'entity'];
+  
+  for (const field of entityFields) {
+    if (firstRow[field] && typeof firstRow[field] === 'string') {
+      return firstRow[field];
+    }
+  }
+  
+  return null;
+};
+
 const dashboardController = {
   async getAllDashboards(req, res) {
     try {
@@ -119,9 +274,9 @@ const dashboardController = {
                   data: item.data,
                   widgetId: item.widgetId,
                   widgetName:
-                    validVisuals.find((v) => v.id === item.widgetId)
-                      ?.name || `Widget ${item.widgetId}`,
-                }));                
+                    validVisuals.find((v) => v.id === item.widgetId)?.name ||
+                    `Widget ${item.widgetId}`,
+                }));
 
                 // Store visual data in CosmosDB with dashboard ID as partition key
                 await visualResponseService.storeVisualResponse(
@@ -131,13 +286,13 @@ const dashboardController = {
 
                 // after store data in cosmos db - generate AI summary
                 try {
-                  // Get last 2 entries for this dashboard
+                  // Get last 5 entries for this dashboard
                   const { database } = await initializeCosmosClient();
                   const container = database.container("visual-responses");
 
                   const sqlquery = {
                     query:
-                      "SELECT TOP 2 * FROM c WHERE c.dashboardId = @dashboardId ORDER BY c.createdAt DESC",
+                      "SELECT TOP 5 * FROM c WHERE c.dashboardId = @dashboardId ORDER BY c.createdAt DESC",
                     parameters: [
                       {
                         name: "@dashboardId",
@@ -153,23 +308,89 @@ const dashboardController = {
                   if (cosmosData.length >= 2) {
                     const latest = cosmosData[0].queryResult || [];
                     const previous = cosmosData[1].queryResult || [];
+
+                    // Generate comparison JSON for current refresh cycle
+                    const comparisonJson = generateComparisonJson(latest, previous);
                     
-                    // Limit data size to prevent token limit exceeded errors
-                    const maxDataSize = 50000; // characters limit
-                    let limitedLatest = latest;
-                    let limitedPrevious = previous;
-                    
-                    if (JSON.stringify(latest).length > maxDataSize) {
-                      limitedLatest = latest.slice(0, 20); // Limit to first 20 widgets
+                    // Store comparison JSON with timestamp
+                    const timestamp = new Date().toISOString();
+
+                    // Store comparison data in a separate container or as part of the response
+                    try {
+                      await container.items.create({
+                        id: `comparison-${dashboard.id}-${timestamp}`,
+                        dashboardId: dashboard.id,
+                        type: "comparison",
+                        timestamp,
+                        comparisonData: comparisonJson,
+                        createdAt: new Date()
+                      });
+                    } catch (storeError) {
+                      console.error(
+                        `[DASHBOARD] Failed to store comparison data for dashboard ${dashboard.id}:`,
+                        storeError.message,
+                      );
                     }
-                    if (JSON.stringify(previous).length > maxDataSize) {
-                      limitedPrevious = previous.slice(0, 20); // Limit to first 20 widgets
-                    }
+
+                    // Get last 5 comparison cycles for AI analysis
+                    const comparisonQuery = {
+                      query:
+                        "SELECT TOP 5 * FROM c WHERE c.dashboardId = @dashboardId AND c.type = 'comparison' ORDER BY c.createdAt DESC",
+                      parameters: [
+                        {
+                          name: "@dashboardId",
+                          value: dashboard.id,
+                        },
+                      ],
+                    };
+
+                    const { resources: comparisonCycles } = await container.items
+                      .query(comparisonQuery)
+                      .fetchAll();
+
+                    // Prepare AI prompt with comparison data
+                    let comparisonContext = "";
+                    if (comparisonCycles.length > 0) {
+                      comparisonContext = "Recent refresh cycle comparisons:\n";
+                      comparisonCycles.forEach((cycle) => {
+                        const timestamp = new Date(cycle.timestamp).toLocaleString();
+                        comparisonContext += `\n${timestamp}\n${JSON.stringify(cycle.comparisonData, null, 2)}\n`;
+                      });
+                    }                    
 
                     const messages = [
                       {
                         role: "function",
-                        content: `Compare latest and previous dashboard data, then write a short client-friendly summary in plain text. Use exactly these bold section titles only: **Dashboard Insights**, **Key Takeaways**, **Focus Areas**, **Outliers**. Do not number the sections. Use actual widgetName values, not "Widget X". For changed widgets, show old vs new values like "Country Names in Bar Chart: users increased from 27 to 28". Use ➤ for bullet points in Dashboard Insights and Focus Areas sections and use • for all nested points, bold important numbers and changes, use 💡 for takeaways and 🔍 for outliers, focus on meaningful values only (counts, percentages, amounts), not IDs. No HTML, no technical wording, no extra text, no invented facts. Data: Latest=${JSON.stringify(limitedLatest)}, Previous=${JSON.stringify(limitedPrevious)}`,
+                        content: `Based on the following dashboard refresh cycle comparison data, write a short client-friendly summary in plain English.${comparisonContext}
+                            Write only these section titles exactly:
+                            **Dashboard Insights**
+                            **Key Takeaways**
+                            **Focus Areas**
+                            **Anomalies**
+                            **Outliers**
+
+                            Rules:
+                            - Mention only meaningful changes and important stable trends.
+                            - Do NOT list every unchanged widget.
+                            - If several KPIs are unchanged, summarize them in one short line.
+                            - Use actual widgetName values only.
+                            - For changed values, show previous and latest values clearly.
+                            - Highlight only business-useful metrics such as counts, percentages, amounts, ranking changes, trend shifts, and notable category movement.
+                            - Ignore IDs, technical fields, and minor noise.
+                            - Keep the summary concise, useful, and easy for non-technical users.
+                            - Do not invent reasons or facts not present in the data.
+                            - If no meaningful outliers exist, say so briefly.
+                            - Focus on what a business user should notice first.
+
+                            Formatting:
+                            - Use → bullets under Dashboard Insights
+                            - Use 💡 bullets under Key Takeaways
+                            - Use 🔍 bullets under Focus Areas
+                            - Use * bullets under Anomalies
+                            - Bold important numbers, important metric names, and important changes
+                            - No HTML
+                            - No markdown other than the required bold section titles
+                            - No extra intro or closing text`,
                         name: "askDatabase",
                       },
                       {
@@ -189,8 +410,6 @@ const dashboardController = {
 
                     const aiSummary =
                       completion.choices[0].message.content.trim();
-
-                    console.log("aisummary-----", aiSummary);
 
                     // Update dashboard summary in database
                     try {
