@@ -453,6 +453,12 @@ const dashboardController = {
             }
           }
 
+          await SQLquery(
+            `UPDATE bi.dashboard_ai_suggestions SET is_status = 0, updated_at = CURRENT_TIMESTAMP WHERE source_id = @param0`,
+            {
+              param0: dashboard.source_id.toString(),
+            },
+          );
           return {
             ...dashboard,
             visualDataStored: visualData.length > 0,
