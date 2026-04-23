@@ -184,7 +184,7 @@ const dashboardController = {
          INNER JOIN [abs].[data_source] ds ON d.source_id = ds.id AND ds.enable_flag = 1
          LEFT JOIN bi.widgets v ON d.id = v.dashboard_id AND v.status_id = 2
          WHERE d.status_id = 2
-           AND ds.source_id = @param0
+           AND ds.source_id = @param0 AND v.chart_type NOT IN ('table', 'pivot')
          ORDER BY d.created_at DESC, v.created_at ASC`,
         { param0: req.body.data.source.id },
       );
