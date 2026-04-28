@@ -1,13 +1,15 @@
-const {
-  visualResponseService,
-  initializeCosmosClient,
-} = require("../services/cosmosService");
+const { widgetDataService, comparisonDataService } = require("../services/blobStorageService");
 const { SQLquery } = require("../services/dbConnect");
 const axios = require("axios");
 const { azureClient } = require("../services/openaiClient");
+const {
+  generateAuthToken,
+  fetchUserProfile,
+} = require("../helpers/authHelper");
 
 const DUCKDB_API_BASE_URL =
   process.env.DUCKDB_API_BASE_URL || "http://localhost:8080";
+
 
 // Helper function to generate comparison JSON between refresh cycles
 const generateComparisonJson = (latestData, previousData) => {
@@ -21,18 +23,18 @@ const generateComparisonJson = (latestData, previousData) => {
   const latestMap = new Map();
   const previousMap = new Map();
 
-  latestData.forEach(widget => {
+  latestData.forEach((widget) => {
     latestMap.set(widget.widgetId, widget);
   });
 
-  previousData.forEach(widget => {
+  previousData.forEach((widget) => {
     previousMap.set(widget.widgetId, widget);
   });
 
   // Compare widgets
   for (const [widgetId, latestWidget] of latestMap) {
     const previousWidget = previousMap.get(widgetId);
-    
+
     if (!previousWidget) {
       // New widget, skip for now
       continue;
@@ -40,10 +42,10 @@ const generateComparisonJson = (latestData, previousData) => {
 
     const latestValue = extractValue(latestWidget.data);
     const previousValue = extractValue(previousWidget.data);
-    
+
     if (latestValue !== null && previousValue !== null) {
       const change = calculateChange(latestValue, previousValue);
-      
+
       if (change.isSignificant) {
         changedWidgets++;
         const diff = {
@@ -54,7 +56,7 @@ const generateComparisonJson = (latestData, previousData) => {
           percentChange: change.percentChange,
           isSignificant: change.isSignificant,
           direction: change.direction,
-          metricType: detectMetricType(latestValue, previousValue)
+          metricType: detectMetricType(latestValue, previousValue),
         };
 
         // Add entity if available
@@ -64,12 +66,12 @@ const generateComparisonJson = (latestData, previousData) => {
         }
 
         widgetDiffs.push(diff);
-        
+
         // Track top movers (top 3 by percent change)
         if (Math.abs(change.percentChange) > 5) {
           topMovers.push({
             widgetName: latestWidget.widgetName,
-            percentChange: change.percentChange
+            percentChange: change.percentChange,
           });
         }
       } else {
@@ -80,36 +82,38 @@ const generateComparisonJson = (latestData, previousData) => {
   }
 
   // Sort top movers by absolute percent change
-  topMovers.sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange));
+  topMovers.sort(
+    (a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange),
+  );
 
   return {
     summaryStats: {
       changedWidgets,
       stableWidgets: stableWidgetsCount,
-      topMovers: Math.min(3, topMovers.length)
+      topMovers: Math.min(3, topMovers.length),
     },
     widgetDiffs: widgetDiffs.slice(0, 10), // Limit to top 10 changes
-    stableMetrics: stableMetrics.slice(0, 5) // Limit to first 5 stable metrics
+    stableMetrics: stableMetrics.slice(0, 5), // Limit to first 5 stable metrics
   };
 };
 
 // Helper function to extract numeric value from widget data
 const extractValue = (data) => {
   if (!data || !Array.isArray(data) || data.length === 0) return null;
-  
+
   // Try to find a numeric value in the first row
   const firstRow = data[0];
   const values = Object.values(firstRow);
-  
+
   for (const val of values) {
-    if (typeof val === 'number') {
+    if (typeof val === "number") {
       return val;
     }
-    if (typeof val === 'string' && !isNaN(parseFloat(val))) {
+    if (typeof val === "string" && !isNaN(parseFloat(val))) {
       return parseFloat(val);
     }
   }
-  
+
   return null;
 };
 
@@ -120,21 +124,22 @@ const calculateChange = (latest, previous) => {
       absoluteChange: latest,
       percentChange: latest > 0 ? 100 : 0,
       isSignificant: latest > 0,
-      direction: latest > 0 ? 'up' : 'stable'
+      direction: latest > 0 ? "up" : "stable",
     };
   }
 
   const absoluteChange = latest - previous;
   const percentChange = (absoluteChange / previous) * 100;
-  
+
   // Consider significant if change > 2% or absolute change > 100
-  const isSignificant = Math.abs(percentChange) > 2 || Math.abs(absoluteChange) > 100;
-  
+  const isSignificant =
+    Math.abs(percentChange) > 2 || Math.abs(absoluteChange) > 100;
+
   return {
     absoluteChange,
     percentChange,
     isSignificant,
-    direction: percentChange > 0 ? 'up' : percentChange < 0 ? 'down' : 'stable'
+    direction: percentChange > 0 ? "up" : percentChange < 0 ? "down" : "stable",
   };
 };
 
@@ -142,25 +147,25 @@ const calculateChange = (latest, previous) => {
 const detectMetricType = (latest, previous) => {
   // Check if values look like currency (typically have decimals and are large)
   if (latest > 1000 || previous > 1000) {
-    return 'currency';
+    return "currency";
   }
-  return 'count';
+  return "count";
 };
 
 // Helper function to extract entity from widget data
 const extractEntity = (data) => {
   if (!data || !Array.isArray(data) || data.length === 0) return null;
-  
+
   const firstRow = data[0];
   // Look for common entity field names
-  const entityFields = ['name', 'title', 'category', 'type', 'game', 'entity'];
-  
+  const entityFields = ["name", "title", "category", "type", "game", "entity"];
+
   for (const field of entityFields) {
-    if (firstRow[field] && typeof firstRow[field] === 'string') {
+    if (firstRow[field] && typeof firstRow[field] === "string") {
       return firstRow[field];
     }
   }
-  
+
   return null;
 };
 
@@ -225,21 +230,33 @@ const dashboardController = {
       // Convert to array and process each dashboard
       const dashboards = Object.values(dashboardMap);
 
+      // Initialize token variable
+      const userProfile = await fetchUserProfile(dashboards[0]?.user_id);
+      let token = null;
+
       // Load parquet file once for all dashboards
       if (dashboards.length > 0) {
+        // Generate JWT token with 1d expiry
+        token = generateAuthToken({
+          userId: userProfile.user_id,
+          accountId: userProfile.default_account,
+          email: userProfile.email,
+          roleId: userProfile.role_id,
+        });
+
         await axios.post(
           `${DUCKDB_API_BASE_URL}/api/duckdb/loadParquetFile`,
           { source_id: dashboards[0].source_id.toString() },
           {
             headers: {
               "Content-Type": "application/json",
-              Authorization: "Bearer null",
+              Authorization: `Bearer ${token}`,
             },
           },
         );
       }
 
-      // Process each dashboard and store data in CosmosDB
+      // Process each dashboard and store data in Blob Storage
       const processedDashboards = await Promise.all(
         dashboards.map(async (dashboard) => {
           let visualData = [];
@@ -265,7 +282,7 @@ const dashboardController = {
                   {
                     headers: {
                       "Content-Type": "application/json",
-                      Authorization: "Bearer null",
+                      Authorization: `Bearer ${token}`,
                     },
                   },
                 );
@@ -278,53 +295,46 @@ const dashboardController = {
                     `Widget ${item.widgetId}`,
                 }));
 
-                // Store visual data in CosmosDB with dashboard ID as partition key
-                await visualResponseService.storeVisualResponse(
+                // Store visual data in Blob Storage
+                const username = userProfile.username; // Use email prefix as username
+                
+                await widgetDataService.storeWidgetData(
+                  username,
+                  dashboard.source_id,
+                  dashboard.name,
                   dashboard.id,
-                  visualData,
+                  visualData
                 );
 
-                // after store data in cosmos db - generate AI summary
+                // after store data in blob storage - generate AI summary
                 try {
                   // Get last 5 entries for this dashboard
-                  const { database } = await initializeCosmosClient();
-                  const container = database.container("visual-responses");
+                  const blobData = await widgetDataService.getLastFiveEntries(
+                    username,
+                    dashboard.source_id,
+                    dashboard.name,
+                    dashboard.id
+                  );
 
-                  const sqlquery = {
-                    query:
-                      "SELECT TOP 5 * FROM c WHERE c.dashboardId = @dashboardId ORDER BY c.createdAt DESC",
-                    parameters: [
-                      {
-                        name: "@dashboardId",
-                        value: dashboard.id,
-                      },
-                    ],
-                  };
-
-                  const { resources: cosmosData } = await container.items
-                    .query(sqlquery)
-                    .fetchAll();
-
-                  if (cosmosData.length >= 2) {
-                    const latest = cosmosData[0].queryResult || [];
-                    const previous = cosmosData[1].queryResult || [];
+                  if (blobData.length >= 2) {
+                    const latest = blobData[0].data || [];
+                    const previous = blobData[1].data || [];
 
                     // Generate comparison JSON for current refresh cycle
-                    const comparisonJson = generateComparisonJson(latest, previous);
-                    
-                    // Store comparison JSON with timestamp
-                    const timestamp = new Date().toISOString();
+                    const comparisonJson = generateComparisonJson(
+                      latest,
+                      previous,
+                    );
 
-                    // Store comparison data in a separate container or as part of the response
+                    // Store comparison data in blob storage
                     try {
-                      await container.items.create({
-                        id: `comparison-${dashboard.id}-${timestamp}`,
-                        dashboardId: dashboard.id,
-                        type: "comparison",
-                        timestamp,
-                        comparisonData: comparisonJson,
-                        createdAt: new Date()
-                      });
+                      await comparisonDataService.storeComparisonData(
+                        username,
+                        dashboard.source_id,
+                        dashboard.name,
+                        dashboard.id,
+                        comparisonJson
+                      );
                     } catch (storeError) {
                       console.error(
                         `[DASHBOARD] Failed to store comparison data for dashboard ${dashboard.id}:`,
@@ -333,30 +343,24 @@ const dashboardController = {
                     }
 
                     // Get last 5 comparison cycles for AI analysis
-                    const comparisonQuery = {
-                      query:
-                        "SELECT TOP 5 * FROM c WHERE c.dashboardId = @dashboardId AND c.type = 'comparison' ORDER BY c.createdAt DESC",
-                      parameters: [
-                        {
-                          name: "@dashboardId",
-                          value: dashboard.id,
-                        },
-                      ],
-                    };
-
-                    const { resources: comparisonCycles } = await container.items
-                      .query(comparisonQuery)
-                      .fetchAll();
+                    const comparisonCycles = await comparisonDataService.getLastFiveComparisons(
+                      username,
+                      dashboard.source_id,
+                      dashboard.name,
+                      dashboard.id
+                    );
 
                     // Prepare AI prompt with comparison data
                     let comparisonContext = "";
                     if (comparisonCycles.length > 0) {
                       comparisonContext = "Recent refresh cycle comparisons:\n";
                       comparisonCycles.forEach((cycle) => {
-                        const timestamp = new Date(cycle.timestamp).toLocaleString();
+                        const timestamp = new Date(
+                          cycle.timestamp,
+                        ).toLocaleString();
                         comparisonContext += `\n${timestamp}\n${JSON.stringify(cycle.comparisonData, null, 2)}\n`;
                       });
-                    }                    
+                    }
 
                     const messages = [
                       {
