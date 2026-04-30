@@ -1020,7 +1020,7 @@ const dashboardController = {
                             - Focus on what a business user should notice first.
                                                     
                             Formatting:
-                            - Use → bullets under Visual Insights and Focus Areas
+                            - Use ➤ bullets under Visual Insights and Focus Areas
                             - Use 💡 bullets under Key Takeaways
                             - Use 🔍 bullets under Outliers
                             - Bold important numbers, important metric names, and important changes
