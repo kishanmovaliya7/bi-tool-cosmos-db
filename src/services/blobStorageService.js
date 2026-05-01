@@ -279,10 +279,7 @@ const dashboardDataService = {
 
       // Get data for the last 2 timestamps
       const lastTwoTimestamps = sortedTimestamps.slice(0, 2);
-      const entries = [];
-
-      console.log("lastTwoTimestamps---", lastTwoTimestamps);
-      
+      const entries = [];      
 
       for (const timestamp of lastTwoTimestamps) {
         const timestampSanitized = timestamp.replace(/[:.]/g, '-');
@@ -521,7 +518,10 @@ const comparisonDataService = {
       const blobs = [];
       for await (const blob of containerClient.listBlobsFlat({ prefix })) {
         if (blob.name.endsWith("/comparison.json")) {
-          blobs.push(blob.name);
+          blobs.push({
+            name: blob.name,
+            lastModified: blob.properties.lastModified
+          });
         }
       }
 
@@ -530,16 +530,14 @@ const comparisonDataService = {
       }
 
       const sortedBlobs = blobs.sort((a, b) => {
-        const timestampA = extractComparisonTimestampFromBlobName(a);
-        const timestampB = extractComparisonTimestampFromBlobName(b);
-        return new Date(timestampB) - new Date(timestampA);
+        return new Date(b.lastModified) - new Date(a.lastModified);
       });
 
       const lastFiveBlobs = sortedBlobs.slice(0, 5);
       const comparisons = [];
 
-      for (const blobName of lastFiveBlobs) {
-        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+      for (const blob of lastFiveBlobs) {
+        const blockBlobClient = containerClient.getBlockBlobClient(blob.name);
         const downloadResponse = await blockBlobClient.download();
         const content = await this.streamToString(
           downloadResponse.readableStreamBody,

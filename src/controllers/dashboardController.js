@@ -312,37 +312,41 @@ const calculateAggregates = (rows) => {
 
 // Function to consolidate diffs by field name to avoid duplicates
 const consolidateDiffsByField = (diffs) => {
-const consolidatedMap = new Map();
+  const consolidatedMap = new Map();
 
-diffs.forEach((diff) => {
-const key = `${diff.fieldName}_${diff.latestValue}_${diff.previousValue}`;
+  diffs.forEach((diff) => {
+    const key = `${diff.fieldName}_${diff.latestValue}_${diff.previousValue}`;
 
-if (!consolidatedMap.has(key)) {
-// First occurrence, store the diff
-consolidatedMap.set(key, { ...diff });
-} else {
-// Merge with existing diff
-const existing = consolidatedMap.get(key);
+    if (!consolidatedMap.has(key)) {
+      // First occurrence, store the diff
+      consolidatedMap.set(key, { ...diff });
+    } else {
+      // Merge with existing diff
+      const existing = consolidatedMap.get(key);
 
-// Track multiple entities if they exist
-if (diff.entity && !existing.entities) {
-existing.entities = [existing.entity || diff.entity].filter(Boolean);
-}
-if (diff.entity && existing.entities && !existing.entities.includes(diff.entity)) {
-existing.entities.push(diff.entity);
-}
-}
-});
+      // Track multiple entities if they exist
+      if (diff.entity && !existing.entities) {
+        existing.entities = [existing.entity || diff.entity].filter(Boolean);
+      }
+      if (
+        diff.entity &&
+        existing.entities &&
+        !existing.entities.includes(diff.entity)
+      ) {
+        existing.entities.push(diff.entity);
+      }
+    }
+  });
 
-// Convert map back to array and clean up
-return Array.from(consolidatedMap.values()).map((diff) => {
-// Remove entity if we have multiple entities, or keep single entity
-if (diff.entities && diff.entities.length > 1) {
-diff.entity = `${diff.entities.length} entities`;
-delete diff.entities;
-}
-return diff;
-});
+  // Convert map back to array and clean up
+  return Array.from(consolidatedMap.values()).map((diff) => {
+    // Remove entity if we have multiple entities, or keep single entity
+    if (diff.entities && diff.entities.length > 1) {
+      diff.entity = `${diff.entities.length} entities`;
+      delete diff.entities;
+    }
+    return diff;
+  });
 };
 
 // Function to create field difference object
@@ -998,34 +1002,42 @@ const dashboardController = {
                       const messages = [
                         {
                           role: "function",
-                          content: `Compare the latest widget comparison results with the previous snapshot and write a short client-friendly summary in plain English.${comparisonContext}
-                            Write only these section titles exactly:
+                          content: `Compare the latest widget results with the previous snapshot and write a client-friendly business summary in clear, professional English.
+                            Data:
+                            ${comparisonContext}
+
+                            Tone:
+                            Sound like a business insights assistant helping the user monitor performance, spot risks, and notice opportunities. Keep it formal, useful, and easy for non-technical users.
+
+                            Sections:
+                            Use only the sections that are relevant based on the data. Do not include empty sections.
+
+                            Allowed section titles:
                             **Visual Insights**
                             **Key Takeaways**
+                            **Business Impact**
                             **Focus Areas**
+                            **Recommended Actions**
                             **Anomalies**
                             **Outliers**
-                                                    
+
                             Rules:
-                            - Mention only meaningful changes and important stable trends.
-                            - Do NOT list every unchanged widget.
-                            - If several KPIs are unchanged, summarize them in one short line.
+                            - Focus on meaningful business changes, stable trends, ranking shifts, growth, drops, spikes, and unusual movement.
                             - Use actual widgetName values only.
-                            - For changed values, show previous and latest values clearly.
-                            - Highlight only business-useful metrics such as counts, percentages, amounts, ranking changes, trend shifts, and notable category movement.
-                            - Ignore IDs, technical fields, and minor noise.
-                            - Keep the summary concise, useful, and easy for non-technical users.
-                            - Do not invent reasons or facts not present in the data.
-                            - If no meaningful outliers exist, say so briefly.
-                            - Focus on what a business user should notice first.
-                                                    
+                            - For changed values, clearly show previous → latest.
+                            - Bold important metric names, values, percentages, and major changes.
+                            - Do not list every unchanged widget.
+                            - If multiple KPIs are stable, summarize them in one short business line.
+                            - Ignore IDs, technical fields, metadata, and minor/noisy changes.
+                            - Do not invent reasons, causes, or recommendations not supported by the data.
+                            - Explain why the change matters to the business where possible.
+                            - Keep the summary concise but insightful.
+
                             Formatting:
-                            - Use ➤ bullets under Visual Insights and Focus Areas
-                            - Use 💡 bullets under Key Takeaways
-                            - Use 🔍 bullets under Outliers
-                            - Bold important numbers, important metric names, and important changes
+                            - Use ➤ bullets under **Visual Insights**, **Business Impact**, **Focus Areas**, and **Recommended Actions**
+                            - Use 💡 bullets under **Key Takeaways**
+                            - Use 🔍 bullets under **Anomalies** and **Outliers**
                             - No HTML
-                            - No markdown other than the required bold section titles
                             - No extra intro or closing text`,
                           name: "askDatabase",
                         },
@@ -1047,12 +1059,18 @@ const dashboardController = {
 
                         const aiSummary =
                           completion.choices[0].message.content.trim();
+                        const widgetSummary = {
+                          summary: aiSummary,
+                          timestamp:
+                            new Date(widgetComparisonCycles[0]?.timestamp)
+                              .toLocaleString() || new Date().toISOString(),
+                        };
 
                         // Store widget summary in database (optional - you can add this if needed)
                         await SQLquery(
                           `UPDATE bi.widgets SET widget_summary = @param0, modified_at = CURRENT_TIMESTAMP WHERE id = @param1`,
                           {
-                            param0: aiSummary,
+                            param0: JSON.stringify(widgetSummary),
                             param1: widgetId,
                           },
                         );

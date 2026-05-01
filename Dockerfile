@@ -34,6 +34,8 @@ ENV DB_SERVER=sqldb-own.database.windows.net
 ENV DB_DATABASE=sqldb
 ENV DB_PORT=1433
 ENV DB_SCHEMA=bi
+ENV JWT_SECRET=${JWT_SECRET}
+ENV STORAGE_CONNECTION_STRING=${STORAGE_CONNECTION_STRING}
 
 # Change to non-root user
 USER cosmosuser
