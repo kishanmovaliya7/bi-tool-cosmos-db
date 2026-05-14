@@ -720,6 +720,20 @@ const dashboardController = {
       const userProfile = await fetchUserProfile(dashboards[0]?.user_id);
       let token = null;
 
+      // Insert connection sync history
+      await SQLquery(
+        `INSERT INTO abs.connection_sync_history 
+              (connection_id, source_id, data_source_id, created_at, created_by)
+            VALUES 
+              (@param0, @param1, @param2, CURRENT_TIMESTAMP, @param3)`,
+        {
+          param0: req.body.data.connection.id,
+          param1: req.body.data.source.id,
+          param2: dashboards[0].source_id,
+          param3: userProfile.user_id,
+        },
+      );
+
       // Load parquet file once for all dashboards
       if (dashboards.length > 0) {
         // Generate JWT token with 1d expiry
@@ -747,15 +761,6 @@ const dashboardController = {
         dashboards.map(async (dashboard) => {
           let visualData = [];
 
-          console.log(
-            "connection_id, source_id, data_source_id, account_id, created_at, created_by",
-            req.body.data.connection.id,
-            req.body.data.source.id,
-            dashboards[0].source_id,
-            dashboard.account_id,
-            userProfile.user_id,
-          );
-          
           if (dashboard.visuals.length > 0) {
             const validVisuals = dashboard.visuals.filter(
               (visual) => visual.sql_query && visual.sql_query.trim() !== "",
@@ -1119,21 +1124,6 @@ const dashboardController = {
             {
               param0: dashboard.source_id.toString(),
             },
-          );
-
-          // Insert connection sync history
-          await SQLquery(
-            `INSERT INTO abs.connection_sync_history 
-              (connection_id, source_id, data_source_id, account_id, created_at, created_by)
-            VALUES 
-              (@param0, @param1, @param2, @param3, CURRENT_TIMESTAMP, @param4)`,
-            {
-              param0: req.body.data.connection.id,
-              param1: req.body.data.source.id,
-              param2: dashboards[0].source_id,
-              param3: dashboard.account_id,
-              param4: userProfile.user_id,
-            }
           );
 
           return {
