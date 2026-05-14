@@ -658,7 +658,7 @@ const extractEntity = (data) => {
 const dashboardController = {
   async getAllDashboards(req, res) {
     try {
-      console.log("Webhook received:", req.body.data.source);
+      console.log("Webhook received:", req.body.data);
 
       // Get dashboard data with visuals in one query with source filtering
       const dashboardsWithVisuals = await SQLquery(
@@ -747,6 +747,15 @@ const dashboardController = {
         dashboards.map(async (dashboard) => {
           let visualData = [];
 
+          console.log(
+            "connection_id, source_id, data_source_id, account_id, created_at, created_by",
+            req.body.data.connection.id,
+            req.body.data.source.id,
+            dashboards[0].source_id,
+            dashboard.account_id,
+            userProfile.user_id,
+          );
+          
           if (dashboard.visuals.length > 0) {
             const validVisuals = dashboard.visuals.filter(
               (visual) => visual.sql_query && visual.sql_query.trim() !== "",
@@ -1062,8 +1071,9 @@ const dashboardController = {
                         const widgetSummary = {
                           summary: aiSummary,
                           timestamp:
-                            new Date(widgetComparisonCycles[0]?.timestamp)
-                              .toLocaleString() || new Date().toISOString(),
+                            new Date(
+                              widgetComparisonCycles[0]?.timestamp,
+                            ).toLocaleString() || new Date().toISOString(),
                         };
 
                         // Store widget summary in database (optional - you can add this if needed)
@@ -1103,12 +1113,29 @@ const dashboardController = {
             }
           }
 
+          // Update dashboard AI suggestions status
           await SQLquery(
             `UPDATE bi.dashboard_ai_suggestions SET is_status = 0, updated_at = CURRENT_TIMESTAMP WHERE source_id = @param0`,
             {
               param0: dashboard.source_id.toString(),
             },
           );
+
+          // Insert connection sync history
+          await SQLquery(
+            `INSERT INTO abs.connection_sync_history 
+              (connection_id, source_id, data_source_id, account_id, created_at, created_by)
+            VALUES 
+              (@param0, @param1, @param2, @param3, CURRENT_TIMESTAMP, @param4)`,
+            {
+              param0: req.body.data.connection.id,
+              param1: req.body.data.source.id,
+              param2: dashboards[0].source_id,
+              param3: dashboard.account_id,
+              param4: userProfile.user_id,
+            }
+          );
+
           return {
             ...dashboard,
             visualDataStored: visualData.length > 0,
